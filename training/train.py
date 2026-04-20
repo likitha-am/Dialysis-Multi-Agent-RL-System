@@ -5,17 +5,16 @@ from agents.pre_agent import PreDialysisAgent
 from agents.intra_agent import IntraDialysisAgent
 from agents.post_agent import PostDialysisAgent
 
-from training.reward import compute_reward
+from environment.dialysis_env import DialysisEnv
 
 
 def train():
 
-    # Initialize agents
+    # Agents
     pre_agent = PreDialysisAgent()
     intra_agent = IntraDialysisAgent()
     post_agent = PostDialysisAgent()
 
-    # Optimizer (ALL params together)
     optimizer = optim.Adam(
         list(pre_agent.parameters()) +
         list(intra_agent.parameters()) +
@@ -25,24 +24,53 @@ def train():
 
     batch_size = 8
 
+    # Environment
+    env = DialysisEnv(batch_size=batch_size)
+    state = env.reset()
+
     for epoch in range(100):
 
         # ----------------------------
-        # Dummy Data (replace later)
+        # Convert state → inputs
         # ----------------------------
 
-        x_pre_num = torch.randn(batch_size, 7)
-        x_pre_cat = torch.randint(0, 3, (batch_size, 3))
+        # Pre agent input (7 features)
+        x_pre_num = torch.stack([
+            state["bp"],
+            state["fluid"],
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"])
+        ], dim=1)
+
+        x_pre_cat = torch.zeros(batch_size, 3, dtype=torch.long)
         x_pre_img = torch.randn(batch_size, 3, 224, 224)
         x_pre_txt = torch.randint(0, 1000, (batch_size, 10))
 
-        x_intra_num = torch.randn(batch_size, 5)
-        x_intra_cat = torch.randint(0, 3, (batch_size, 1))
+        # Intra agent input (5 features)
+        x_intra_num = torch.stack([
+            state["bp"],
+            state["fluid"],
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"])
+        ], dim=1)
+
+        x_intra_cat = torch.zeros(batch_size, 1, dtype=torch.long)
         x_intra_img = torch.randn(batch_size, 3, 224, 224)
         x_intra_txt = torch.randint(0, 1000, (batch_size, 10))
 
-        x_post_num = torch.randn(batch_size, 4)
-        x_post_cat = torch.randint(0, 3, (batch_size, 1))
+        # Post agent input (4 features)
+        x_post_num = torch.stack([
+            state["bp"],
+            state["fluid"],
+            torch.zeros_like(state["bp"]),
+            torch.zeros_like(state["bp"])
+        ], dim=1)
+
+        x_post_cat = torch.zeros(batch_size, 1, dtype=torch.long)
         x_post_img = torch.randn(batch_size, 3, 224, 224)
         x_post_txt = torch.randint(0, 1000, (batch_size, 10))
 
@@ -50,7 +78,7 @@ def train():
         m0 = torch.zeros(batch_size, 4)
 
         # ----------------------------
-        # Forward Pass
+        # Forward pass
         # ----------------------------
 
         a_pre, m1 = pre_agent(x_pre_num, x_pre_cat, x_pre_img, x_pre_txt, m0)
@@ -64,12 +92,20 @@ def train():
         )
 
         # ----------------------------
-        # Compute Reward → Loss
+        # Environment step (FIXED)
         # ----------------------------
 
-        reward = compute_reward(a_pre, a_intra, a_post)
+        state, reward = env.step(
+    a_pre.detach(),
+    a_intra.detach(),
+    a_post.detach()
+)
 
-        loss = -reward  # maximize reward
+        loss = -reward + 0.001 * (
+    a_pre.pow(2).mean() +
+    a_intra.pow(2).mean() +
+    a_post.pow(2).mean()
+)
 
         # ----------------------------
         # Backprop
