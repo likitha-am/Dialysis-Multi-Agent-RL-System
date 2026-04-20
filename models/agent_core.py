@@ -23,7 +23,7 @@ class AgentCore(nn.Module):
 
         z = self.net(x)
 
-        action = self.action_head(z)
+        action = torch.tanh(self.action_head(z))
         message = self.message_head(z)
 
         return action, message

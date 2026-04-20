@@ -10,7 +10,6 @@ from environment.dialysis_env import DialysisEnv
 
 def train():
 
-    # Agents
     pre_agent = PreDialysisAgent()
     intra_agent = IntraDialysisAgent()
     post_agent = PostDialysisAgent()
@@ -19,100 +18,104 @@ def train():
         list(pre_agent.parameters()) +
         list(intra_agent.parameters()) +
         list(post_agent.parameters()),
-        lr=1e-3
+        lr=1e-4
     )
 
     batch_size = 8
-
-    # Environment
     env = DialysisEnv(batch_size=batch_size)
-    state = env.reset()
 
     for epoch in range(100):
 
-        # ----------------------------
-        # Convert state → inputs
-        # ----------------------------
+        total_loss = 0
 
-        # Pre agent input (7 features)
-        x_pre_num = torch.stack([
-            state["bp"],
-            state["fluid"],
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"])
-        ], dim=1)
+        # 🔥 multiple patients per epoch (variance reduction)
+        for episode in range(5):
 
-        x_pre_cat = torch.zeros(batch_size, 3, dtype=torch.long)
-        x_pre_img = torch.randn(batch_size, 3, 224, 224)
-        x_pre_txt = torch.randint(0, 1000, (batch_size, 10))
+            state = env.reset()
 
-        # Intra agent input (5 features)
-        x_intra_num = torch.stack([
-            state["bp"],
-            state["fluid"],
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"])
-        ], dim=1)
+            for step in range(5):
 
-        x_intra_cat = torch.zeros(batch_size, 1, dtype=torch.long)
-        x_intra_img = torch.randn(batch_size, 3, 224, 224)
-        x_intra_txt = torch.randint(0, 1000, (batch_size, 10))
+                noise = lambda x: torch.randn_like(x) * 0.1
 
-        # Post agent input (4 features)
-        x_post_num = torch.stack([
-            state["bp"],
-            state["fluid"],
-            torch.zeros_like(state["bp"]),
-            torch.zeros_like(state["bp"])
-        ], dim=1)
+                # -------- Pre --------
+                x_pre_num = torch.stack([
+                    state["bp"],
+                    state["fluid"],
+                    noise(state["bp"]),
+                    noise(state["bp"]),
+                    noise(state["bp"]),
+                    noise(state["bp"]),
+                    noise(state["bp"])
+                ], dim=1)
 
-        x_post_cat = torch.zeros(batch_size, 1, dtype=torch.long)
-        x_post_img = torch.randn(batch_size, 3, 224, 224)
-        x_post_txt = torch.randint(0, 1000, (batch_size, 10))
+                x_pre_cat = torch.zeros(batch_size, 3, dtype=torch.long)
+                x_pre_img = torch.randn(batch_size, 3, 224, 224)
+                x_pre_txt = torch.randint(0, 1000, (batch_size, 10))
 
-        # Initial message
-        m0 = torch.zeros(batch_size, 4)
+                # -------- Intra --------
+                x_intra_num = torch.stack([
+                    state["bp"],
+                    state["fluid"],
+                    noise(state["bp"]),
+                    noise(state["bp"]),
+                    noise(state["bp"])
+                ], dim=1)
 
-        # ----------------------------
-        # Forward pass
-        # ----------------------------
+                x_intra_cat = torch.zeros(batch_size, 1, dtype=torch.long)
+                x_intra_img = torch.randn(batch_size, 3, 224, 224)
+                x_intra_txt = torch.randint(0, 1000, (batch_size, 10))
 
-        a_pre, m1 = pre_agent(x_pre_num, x_pre_cat, x_pre_img, x_pre_txt, m0)
+                # -------- Post --------
+                x_post_num = torch.stack([
+                    state["bp"],
+                    state["fluid"],
+                    noise(state["bp"]),
+                    noise(state["bp"])
+                ], dim=1)
 
-        a_intra, m2 = intra_agent(
-            x_intra_num, x_intra_cat, x_intra_img, x_intra_txt, m1
-        )
+                x_post_cat = torch.zeros(batch_size, 1, dtype=torch.long)
+                x_post_img = torch.randn(batch_size, 3, 224, 224)
+                x_post_txt = torch.randint(0, 1000, (batch_size, 10))
 
-        a_post, m3 = post_agent(
-            x_post_num, x_post_cat, x_post_img, x_post_txt, m2
-        )
+                m0 = torch.zeros(batch_size, 4)
 
-        # ----------------------------
-        # Environment step (FIXED)
-        # ----------------------------
+                # -------- Forward --------
+                a_pre, m1 = pre_agent(x_pre_num, x_pre_cat, x_pre_img, x_pre_txt, m0)
 
-        state, reward = env.step(
-    a_pre.detach(),
-    a_intra.detach(),
-    a_post.detach()
-)
+                a_intra, m2 = intra_agent(
+                    x_intra_num, x_intra_cat, x_intra_img, x_intra_txt, m1
+                )
 
-        loss = -reward + 0.001 * (
-    a_pre.pow(2).mean() +
-    a_intra.pow(2).mean() +
-    a_post.pow(2).mean()
-)
+                a_post, m3 = post_agent(
+                    x_post_num, x_post_cat, x_post_img, x_post_txt, m2
+                )
 
-        # ----------------------------
-        # Backprop
-        # ----------------------------
+                # -------- Environment --------
+                state, reward = env.step(a_pre, a_intra, a_post)
 
+                loss = -reward
+                total_loss += loss
+
+                # 🔥 cut graph each step
+                state = {
+                    "bp": state["bp"].detach(),
+                    "fluid": state["fluid"].detach()
+                }
+
+        # 🔥 average loss over all episodes + steps
+        loss = total_loss / (5 * 5)
+
+        # -------- Backprop --------
         optimizer.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            list(pre_agent.parameters()) +
+            list(intra_agent.parameters()) +
+            list(post_agent.parameters()),
+            max_norm=1.0
+        )
+
         optimizer.step()
 
         print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
