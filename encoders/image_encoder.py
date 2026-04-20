@@ -11,12 +11,15 @@ class ImageEncoder(nn.Module):
             nn.Conv2d(16, 32, kernel_size=3, stride=2),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2),
-            nn.ReLU(),
-            nn.Flatten()
+            nn.ReLU()
         )
 
-        self.fc = nn.Linear(64 * 26 * 26, output_dim)
+        self.flatten = nn.Flatten()
+
+        # 🔥 Lazy Linear (AUTO detects input size)
+        self.fc = nn.LazyLinear(output_dim)
 
     def forward(self, x):
         x = self.cnn(x)
+        x = self.flatten(x)
         return self.fc(x)
